@@ -6,10 +6,10 @@ public static class FabricaDeMotor
     {
         return motor switch
         {
-            Motor.SqlServer => new AccesoSqlServer(),
             Motor.Postgres => new AccesoPostgres(),
+            Motor.SqlServer => new AccesoSqlServer(),
             Motor.MySql => new AccesoMySql(),
-            _ => throw new Exception("Motor inválido")
+            _ => throw new ArgumentException("Motor inválido")
         };
     }
 }

@@ -131,12 +131,80 @@ public class AccesoSqlServer : IAccesoDatos
 
     public void EjecutarOperaciones()
     {
-        Console.WriteLine("Operaciones ejecutadas.");
+        using var cn = new SqlConnection(_connectionString);
+
+        cn.Open();
+
+        using var tx = cn.BeginTransaction();
+
+        try
+        {
+            Console.WriteLine("\nRF4 — Ejecutar operaciones");
+
+            ConsultarProductos(cn, tx);
+
+            MostrarPedido(cn, tx, 1);
+
+            ActualizarPrecios(cn, tx, 1);
+
+            BorrarDetalle(cn, tx, 1, 2);
+
+            tx.Commit();
+
+            Console.WriteLine("Operaciones confirmadas (commit).");
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     public void DemostrarRollback()
     {
-        Console.WriteLine("Rollback OK.");
+        Console.WriteLine("\nRF5 — Demostrar rollback");
+
+        using var cn = new SqlConnection(_connectionString);
+
+        cn.Open();
+
+        decimal precioAntes = ObtenerPrecio(cn, 1);
+
+        Console.WriteLine($"Precio del producto #1 ANTES: ${precioAntes:0.00}");
+
+        using var tx = cn.BeginTransaction();
+
+        try
+        {
+            using var cmd = new SqlCommand(
+                "UPDATE productos SET precio = 1 WHERE id = 1",
+                cn,
+                tx);
+
+            cmd.ExecuteNonQuery();
+
+            Console.WriteLine(
+                "UPDATE aplicado (precio -> 1) dentro de la transacción.");
+
+            throw new Exception("Error simulado: algo salió mal.");
+        }
+        catch (Exception ex)
+        {
+            tx.Rollback();
+
+            Console.WriteLine(
+                $"Excepción capturada -> ROLLBACK. ({ex.Message})");
+        }
+
+        decimal precioDespues = ObtenerPrecio(cn, 1);
+
+        Console.WriteLine($"Precio del producto #1 DESPUÉS: ${precioDespues:0.00}");
+
+        if (precioAntes == precioDespues)
+        {
+            Console.WriteLine(
+                "OK: el rollback funcionó, el dato NO cambió.");
+        }
     }
 
     private int InsertarCategoria(SqlConnection cn, SqlTransaction tx, string nombre)
@@ -237,5 +305,129 @@ public class AccesoSqlServer : IAccesoDatos
         cmd.Parameters.AddWithValue("@precio", precio);
 
         cmd.ExecuteNonQuery();
+    }
+
+    private void ConsultarProductos(SqlConnection cn, SqlTransaction tx)
+    {
+        Console.WriteLine("\n[C1] Productos con su categoría:");
+
+        var sql = @"
+        SELECT p.id,
+               p.nombre,
+               p.precio,
+               c.nombre
+        FROM productos p
+        INNER JOIN categorias c
+            ON p.categoria_id = c.id";
+
+        using var cmd = new SqlCommand(sql, cn, tx);
+
+        using var dr = cmd.ExecuteReader();
+
+        while (dr.Read())
+        {
+            Console.WriteLine(
+                $"#{dr.GetInt32(0)} " +
+                $"{dr.GetString(1)} — " +
+                $"${dr.GetDecimal(2):0.00} " +
+                $"[{dr.GetString(3)}]");
+        }
+    }
+
+    private void MostrarPedido(SqlConnection cn, SqlTransaction tx, int pedidoId)
+    {
+        Console.WriteLine($"\n[C2] Detalle y total del pedido #{pedidoId}:");
+
+        var sql = @"
+        SELECT p.nombre,
+               dp.cantidad,
+               dp.precio_unitario,
+               dp.cantidad * dp.precio_unitario
+        FROM detalle_pedido dp
+        INNER JOIN productos p
+            ON p.id = dp.producto_id
+        WHERE dp.pedido_id = @pedidoId";
+
+        using var cmd = new SqlCommand(sql, cn, tx);
+
+        cmd.Parameters.AddWithValue("@pedidoId", pedidoId);
+
+        using var dr = cmd.ExecuteReader();
+
+        while (dr.Read())
+        {
+            Console.WriteLine(
+                $"{dr.GetString(0)} x{dr.GetInt32(1)} @ " +
+                $"${dr.GetDecimal(2):0.00} = " +
+                $"${dr.GetDecimal(3):0.00}");
+        }
+
+        dr.Close();
+
+        sql = @"
+        SELECT SUM(cantidad * precio_unitario)
+        FROM detalle_pedido
+        WHERE pedido_id = @pedidoId";
+
+        using var totalCmd = new SqlCommand(sql, cn, tx);
+
+        totalCmd.Parameters.AddWithValue("@pedidoId", pedidoId);
+
+        decimal total = Convert.ToDecimal(totalCmd.ExecuteScalar());
+
+        Console.WriteLine($"TOTAL pedido #{pedidoId}: ${total:0.00}");
+    }
+
+    private void ActualizarPrecios(
+    SqlConnection cn,
+    SqlTransaction tx,
+    int categoriaId)
+    {
+        var sql = @"
+        UPDATE productos
+        SET precio = precio * 1.10
+        WHERE categoria_id = @categoriaId";
+
+        using var cmd = new SqlCommand(sql, cn, tx);
+
+        cmd.Parameters.AddWithValue("@categoriaId", categoriaId);
+
+        int filas = cmd.ExecuteNonQuery();
+
+        Console.WriteLine(
+            $"[U1] Subí 10% precios de categoría #{categoriaId} -> {filas} filas.");
+    }
+
+    private void BorrarDetalle(
+    SqlConnection cn,
+    SqlTransaction tx,
+    int pedidoId,
+    int productoId)
+    {
+        var sql = @"
+        DELETE FROM detalle_pedido
+        WHERE pedido_id = @pedidoId
+        AND producto_id = @productoId";
+
+        using var cmd = new SqlCommand(sql, cn, tx);
+
+        cmd.Parameters.AddWithValue("@pedidoId", pedidoId);
+        cmd.Parameters.AddWithValue("@productoId", productoId);
+
+        int filas = cmd.ExecuteNonQuery();
+
+        Console.WriteLine(
+            $"[D1] Borré línea (pedido {pedidoId}, producto {productoId}) -> {filas} filas.");
+    }
+
+    private decimal ObtenerPrecio(SqlConnection cn, int id)
+    {
+        using var cmd = new SqlCommand(
+            "SELECT precio FROM productos WHERE id = @id",
+            cn);
+
+        cmd.Parameters.AddWithValue("@id", id);
+
+        return Convert.ToDecimal(cmd.ExecuteScalar());
     }
 }
